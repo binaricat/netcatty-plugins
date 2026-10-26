@@ -1,4 +1,4 @@
-# Bootstrap audit and pending publication
+# Bootstrap audit and maintenance
 
 Initial local bootstrap: 78606dd13261553fe8da3bdc06890ecc959223e2.
 Local audit follow-up: c88d2b3d11d3f35c9e0ffb8f760ba7ad07c573ac.
@@ -14,7 +14,7 @@ tests and dependency pin. Hosted branch protection remains a maintainer setup st
 - jsonschema-specifications 2025.9.1
 - referencing 0.37.0
 - rpds-py 0.30.0
-- typing_extensions 4.16.0 (transitive dependency; pinned on review branch)
+- typing_extensions 4.16.0 (transitive dependency)
 - actions/checkout 11bd71901bbe5b1630ceea73d27597364c9af683 (v4.2.2)
 
 Python comes from ubuntu-latest on hosted CI, so interpreter/OS images are not
@@ -59,27 +59,28 @@ or cleared. A withdrawn version cannot be current. Set current to another review
 version or null and regenerate catalog.json. Listing acceptance cannot forcibly
 remove an already-installed plugin. No automatic rollback/activation is performed.
 
-## Publication and subsequent change procedure
+## Publication evidence and ongoing changes
 
-1. User creates exactly binaricat/netcatty-plugins as a public EMPTY repository,
-   without generated README, license or .gitignore. Do not change credentials or
-   account security. Stop if existing content is present; preserve it and prepare
-   a normal PR against that repository instead.
-2. In an authorized execution environment, materialize the saved Library bundle,
-   verify its supplied SHA-256, run `git bundle verify`, and clone it locally.
-   Review initial main commit and review/static-download-audit separately.
-3. Read the target repository metadata and refs using already authorized access.
-   Confirm owner, public visibility and absence of refs immediately before push.
-4. Push only `main:main` with ordinary non-force push. If another actor initialized
-   main meanwhile, let the non-fast-forward rejection stop publication. Do not use
-   force, delete refs, or rewrite existing remote history. If a different branch
-   appears meanwhile, stop and reconcile by PR before proceeding further.
-5. Push the review branch and open a PR for its audit/tests; do not auto-merge it.
-   Subsequent changes always use reviewable PRs.
-6. Inspect the actual main Actions run and canonical raw catalog URL. Configure
-   branch/Actions review rules only through the separately authorized maintainer
-   workflow. Report exact commit, run URL and checks; do not claim remote success
-   from the local test results alone.
+The public repository is initialized at
+[32578ae27ff86f0151511478d698a1cdc12fb2e0](https://github.com/binaricat/netcatty-plugins/commit/32578ae27ff86f0151511478d698a1cdc12fb2e0).
+The initial [GitHub Actions run](https://github.com/binaricat/netcatty-plugins/actions/runs/40278609561)
+passed the static-index job, including all 28 unit tests and catalog validation.
+The canonical [catalog](https://raw.githubusercontent.com/binaricat/netcatty-plugins/main/catalog.json)
+was fetched without authentication and compared byte-for-byte with the published
+checkout. Both initial listings remain source-only; no live release download was
+available to exercise. Download policy and package inspection use synthetic tests.
 
-The user created the repository; account-level repository creation is not retried.
-No plugin release or Netcatty app PR merge is part of publication.
+For ongoing updates:
+
+1. Branch from current main, preserve existing records and edit index.json.
+2. Run tests, regenerate catalog.json, and validate against main's ledger as in README.
+3. Open a reviewable PR. Require owner review and static-index success against the
+   latest base. A moved base needs fresh validation before merge.
+4. Review workflow, dependency, schema and validator changes separately. PR CI runs
+   trusted base tooling, so proposed tooling changes also need explicit local tests.
+5. After merge, inspect the actual main Actions run and canonical catalog response.
+   Do not infer published success from local tests or a PR result alone.
+
+No branch-protection/Actions approval settings were changed during bootstrap.
+Configure the rules listed in MAINTAINERS.md before relying on enforced review.
+This index does not publish plugin packages or merge/release Netcatty application PRs.
