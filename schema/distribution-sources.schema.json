@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "plugins"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "plugins": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "version",
+          "repository",
+          "commit",
+          "resources"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "resources": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "readme"
+            ],
+            "properties": {
+              "readme": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "sourcePath",
+                  "sha256"
+                ],
+                "properties": {
+                  "sourcePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              },
+              "iconLight": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "sourcePath",
+                  "sha256"
+                ],
+                "properties": {
+                  "sourcePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              },
+              "iconDark": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "sourcePath",
+                  "sha256"
+                ],
+                "properties": {
+                  "sourcePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
