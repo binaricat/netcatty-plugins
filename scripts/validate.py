@@ -1,0 +1,155 @@
+"""Static index admission. Never import, extract, build or execute a plugin."""
+import argparse
+import copy
+import hashlib
+import io
+import json
+import pathlib
+import re
+import urllib.parse
+import urllib.request
+import zipfile
+from jsonschema import Draft202012Validator, FormatChecker
+from referencing import Registry, Resource
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+LIMIT = 32 * 1024 * 1024
+HOSTS = {'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'}
+
+def require(ok, message):
+    if not ok:
+        raise ValueError(message)
+
+def pairs(items):
+    result = {}
+    for key, value in items:
+        require(key not in result, 'Duplicate JSON key: ' + key)
+        result[key] = value
+    return result
+
+def read(path):
+    require(not path.is_symlink(), 'Symlinks are forbidden')
+    require(path.stat().st_size <= 8 * 1024 * 1024, 'JSON exceeds 8 MiB')
+    return json.loads(path.read_text(), object_pairs_hook=pairs)
+
+def url_allowed(url):
+    u = urllib.parse.urlsplit(url)
+    require(u.scheme == 'https' and u.hostname in HOSTS and not u.username and not u.password
+            and not u.port and not u.fragment, 'Unapproved download URL')
+    return url
+
+def validate(data, baseline=None):
+    contract = read(ROOT / 'schema/plugin-contract.schema.json')
+    registry = Registry().with_resource(contract['$id'], Resource.from_contents(contract))
+    Draft202012Validator(read(ROOT / 'schema/index.schema.json'), registry=registry,
+                        format_checker=FormatChecker()).validate(data)
+    ids, catalog = set(), []
+    for plugin in data['plugins']:
+        require(plugin['id'] not in ids, 'Duplicate plugin ID')
+        ids.add(plugin['id'])
+        versions, tags, urls, hashes = set(), set(), set(), set()
+        for record in plugin['versions']:
+            e = record['entry']; m = e['manifest']; v = e['version']
+            require(e['id'] == plugin['id'] == m['id'] and v == m['version'], 'Identity/version mismatch')
+            require(v not in versions, 'Duplicate version')
+            versions.add(v)
+            require(m.get('license') == e['license'], 'License mismatch')
+            p = e['readme']
+            require(p.endswith('.md') and not re.search(r'[\\%?#\x00]', p)
+                    and all(x not in ('', '.', '..') for x in p.split('/')), 'Unsafe README path')
+            main = m.get('main', {})
+            perms = [x if isinstance(x, str) else x['permission'] for x in
+                     m['permissions']['required'] + m['permissions'].get('optional', [])]
+            require(main.get('browser') and not main.get('node') and not m.get('companionExecutables')
+                    and not set(perms).intersection({'runtime.advanced','companion.execute','terminal.intercept.input','terminal.intercept.output'})
+                    and not any(p['kind'] in ('terminal.interceptor.input','terminal.interceptor.output')
+                                for p in m.get('contributes', {}).get('providers', [])), 'Browser-only admission required')
+            if record['distribution'] == 'source-only':
+                require('artifact' not in e and 'tag' not in record, 'Source-only cannot advertise a package/tag')
+            else:
+                require('artifact' in e and 'tag' in record, 'Release requires artifact and tag')
+                tag, artifact = record['tag'], e['artifact']
+                url_allowed(artifact['url'])
+                prefix = f"https://github.com/{e['repository']}/releases/download/{tag}/"
+                require(artifact['url'].startswith(prefix) and re.fullmatch(r'[A-Za-z0-9._-]+\.ncpkg', artifact['url'][len(prefix):]), 'Expected versioned GitHub ncpkg release asset')
+                require(tag not in tags and artifact['url'] not in urls and artifact['sha256'] not in hashes, 'Each version needs a new tag and asset')
+                tags.add(tag); urls.add(artifact['url']); hashes.add(artifact['sha256'])
+            if v == plugin['current']:
+                require(record['withdrawal'] is None, 'Withdrawn version cannot be current')
+                catalog.append(copy.deepcopy(e))
+        require(plugin['current'] is None or plugin['current'] in versions, 'Missing current version')
+    if baseline is not None:
+        after = {(p['id'], r['entry']['version']): r for p in data['plugins'] for r in p['versions']}
+        for p in baseline['plugins']:
+            for old in p['versions']:
+                key = (p['id'], old['entry']['version'])
+                require(key in after, 'Version history cannot be removed')
+                new = after[key]
+                require({k:v for k,v in new.items() if k != 'withdrawal'} ==
+                        {k:v for k,v in old.items() if k != 'withdrawal'}, 'Published version metadata is immutable; publish a new version')
+                if old['withdrawal'] is not None:
+                    require(new['withdrawal'] == old['withdrawal'], 'Withdrawal cannot be undone or rewritten')
+    return catalog
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+def download(url):
+    opener = urllib.request.build_opener(NoRedirect)
+    for _ in range(5):
+        url_allowed(url)
+        try:
+            with opener.open(urllib.request.Request(url, headers={'User-Agent':'netcatty-index-validator'}), timeout=30) as response:
+                content = response.read(LIMIT + 1)
+                require(len(content) <= LIMIT, 'Package exceeds 32 MiB')
+                return content
+        except urllib.error.HTTPError as error:
+            if error.code not in (301,302,303,307,308):
+                raise
+            url = urllib.parse.urljoin(url, error.headers['Location'])
+            error.close()
+    raise ValueError('Too many redirects')
+
+def inspect_package(content, entry):
+    require(len(content) <= LIMIT, 'Package exceeds 32 MiB')
+    require(hashlib.sha256(content).hexdigest() == entry['artifact']['sha256'], 'Package SHA-256 mismatch')
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        infos = archive.infolist()
+        require(len(infos) <= 4096, 'Too many archive entries')
+        names, size = set(), 0
+        for item in infos:
+            name = item.filename
+            require(name not in names, 'Duplicate archive path'); names.add(name)
+            require(not re.search(r'[\\:\x00]', name) and all(p not in ('', '.', '..') for p in name.rstrip('/').split('/')), 'Unsafe archive path')
+            mode = item.external_attr >> 16
+            require(mode & 0o170000 not in (0o120000, 0o020000, 0o060000, 0o010000), 'Nonregular archive entry')
+            require(not item.flag_bits & 1, 'Encrypted archive entry')
+            size += item.file_size
+        require(size <= 128 * 1024 * 1024, 'Expanded package exceeds limit')
+        info = archive.getinfo('netcatty.plugin.json')
+        require(info.file_size <= 1024 * 1024, 'Manifest exceeds limit')
+        manifest = json.loads(archive.read(info), object_pairs_hook=pairs)
+        require(manifest == entry['manifest'], 'Package manifest differs from index')
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--root', type=pathlib.Path, default=ROOT)
+    parser.add_argument('--baseline', type=pathlib.Path)
+    parser.add_argument('--write', action='store_true')
+    parser.add_argument('--download', action='store_true')
+    args = parser.parse_args()
+    data = read(args.root / 'index.json')
+    expected = validate(data, read(args.baseline) if args.baseline else None)
+    if args.write:
+        (args.root / 'catalog.json').write_text(json.dumps(expected, indent=2, ensure_ascii=False)+'\n')
+    require(read(args.root / 'catalog.json') == expected, 'catalog.json must exactly match active versions; run --write')
+    if args.download:
+        for p in data['plugins']:
+            for r in p['versions']:
+                if r['distribution'] == 'release' and r['withdrawal'] is None:
+                    inspect_package(download(r['entry']['artifact']['url']), r['entry'])
+    print(f"Validated {len(data['plugins'])} plugins; {len(expected)} current entries")
+
+if __name__ == '__main__':
+    main()

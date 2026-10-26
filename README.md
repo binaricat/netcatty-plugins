@@ -6,7 +6,7 @@ the publisher's repository; they are not merged into Netcatty.
 
 ## Consumer contract
 
-Planned canonical endpoint (available only after this repository is published):
+Canonical endpoint:
 
 `https://raw.githubusercontent.com/binaricat/netcatty-plugins/main/catalog.json`
 
