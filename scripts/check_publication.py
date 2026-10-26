@@ -4,7 +4,11 @@ import re
 import subprocess
 import sys
 import urllib.request
-from validate import NoRedirect
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 REPOSITORY = 'binaricat/netcatty-plugins'
 

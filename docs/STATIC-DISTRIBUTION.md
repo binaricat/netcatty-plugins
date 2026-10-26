@@ -2,9 +2,9 @@
 
 This is a separate, assets-only Cloudflare Worker. It does not change the main
 website, create R2 storage, enable a paid service, or execute plugin code. The
-repository PR prepares files and CI artifacts; cloud resource creation, upload,
-domain binding and credentials are separate actions owned by the deployment task.
-No Cloudflare token is created or configured here.
+repository PR prepares files and a guarded publication job. Worker shell creation,
+initial domain binding and credential configuration remain separate approved actions.
+No Cloudflare token or GitHub environment is created or configured by this PR.
 
 ## Initial source and scope
 
@@ -98,33 +98,94 @@ raw.githubusercontent.com origin without credentials or redirects, 20-second req
 timeouts, 256 KiB per resource and 16 MiB total. The CI job has a 10-minute timeout.
 The schema/validator and source pins are from the checked-out, reviewed main commit.
 
-`Build static snapshot` runs only on main push or main manual dispatch, uses a pinned
-checkout/upload action, read-only token permissions, and no deployment credentials.
+`Build and publish static snapshot` runs only on main push or main manual dispatch.
+Its build job uses pinned actions, read-only token permissions and no Cloudflare
+credentials. The publication job is isolated behind the `cloudflare-production`
+GitHub environment and only runs cloud commands when its approved configuration
+is present.
 It verifies that the exact main commit corresponds to a merged PR, rejecting direct
 pushes, then rechecks current main before exposing the complete artifact. There is
 no pull_request/pull_request_target trigger for snapshot generation. The existing
-untrusted PR validation workflow remains unchanged. Per-repo concurrency serializes
-snapshot generation; no cancellation of an in-progress build is requested.
+untrusted PR validation workflow remains unchanged. One workflow-level concurrency group serializes the entire build/publication run;
+no cancellation of an in-progress publication is requested. Pending runs may be
+coalesced by GitHub; only the latest still-current main is publishable.
 
 The automatic workflow starts only after this PR is reviewed and merged. The initial
 bootstrap directory is a separately reviewable handoff based on the existing main
 snapshot; it is not evidence of an already deployed domain or future auto-deployment.
 
-## Separate deployment approval
+## Guarded publication job (not run during PR preparation)
 
-A publisher must recheck current main immediately before deployment, verify artifact
-provenance and SHA256SUMS, serialize deployments in the same publication order, and
-activate one complete static version. Do not deploy a superseded queued snapshot.
-Future credentialed publication must stay in the trusted-main workflow/concurrency
-group with a protected environment; never attach credentials to PRs. The exact token
-scope and storage require separate user approval. No DNS/domain permission belongs
-in the routine publication credential once the domain is configured.
+The `publish` job depends on the successful snapshot job and uses GitHub environment
+`cloudflare-production`. It downloads the exact artifact ID from that build job,
+checks SHA256SUMS against the build job's digest, verifies the complete file set and
+source commit, and rechecks current main / merged-PR provenance. There is no artifact
+lookup by user-supplied URL, branch, latest run, or external workflow event.
 
-`wrangler.jsonc` only names the isolated Worker and assets directory; it does not
-bind the hostname or supply account/token settings. Parent deployment owns that step,
-after serving/header/hash checks pass. The existing Cloudflare connector cannot
-supply the asset-upload session JWT override, so automated cloud upload is pending
-an approved capability/credential route, not silently simulated.
+Wrangler is fixed to 4.152.0 with a committed npm lockfile including dependency
+integrities. Checkout, download/upload artifact, and setup-node actions are fixed to
+commit SHAs. Dependencies install with `npm ci --ignore-scripts` before any Cloudflare
+token is exposed. Ordinary configuration tests do not invoke Wrangler or cloud APIs.
+
+Publication uses `wrangler versions upload` to upload one complete assets version
+without activating it. It reads the exact version ID from Wrangler's structured
+version-upload record, then rechecks the complete artifact and current main immediately
+before `wrangler versions deploy <exact-id>@100 --yes`. It never deploys a floating
+latest version. It does not invoke `triggers deploy`, routes, custom-domain, DNS,
+R2, billing, login or token commands. Failed checks stop activation; an uploaded but
+inactive version may remain if main changed while uploading. No automatic retry,
+rollback, credential broadening or account fallback is configured.
+
+### User-owned configuration, separately approved
+
+Before merging/enabling publication, the user configures the repository's GitHub
+**Environment** named exactly `cloudflare-production`:
+
+- Restrict deployment branches to `main`; configure environment review appropriate
+  for the single maintainer (do not require a different reviewer who does not exist).
+- Environment secret: `CLOUDFLARE_API_TOKEN`.
+- Environment variable: `CLOUDFLARE_ACCOUNT_ID`.
+- Token selection: the existing **netcatty-plugins** Worker only, **Editor** role.
+  No account-wide Worker access, DNS/domain, R2 or billing permissions are requested.
+
+The account ID must be the real selected Cloudflare account, not a guessed value.
+Do not paste credentials into an issue, PR, chat, repository file, command argument or
+workflow log. This PR does not create the environment, configure values, request a
+token, or assume any already exists. With missing configuration the publication job
+records **skipped, no upload/deployment attempted** and executes no cloud commands.
+A green build or skipped publication is not deployment evidence.
+
+### First activation and single publisher
+
+1. The separately approved cloud task creates the named undeployed Worker shell so
+   the user can select that Worker when granting the narrow token. Do not create it
+   implicitly via a broader credential. `versions upload` requires an existing Worker.
+2. Before initial publication, inspect the draft, exact registry snapshot and hashes.
+   The parent owns review/merge and explicit credential-setup approval. This task
+   performs neither. Do not run the draft workflow to test credentials.
+3. After approval, merge the reviewed PR into main. Its successful build and the
+   configured environment allow the first complete static version upload/activation.
+   For manual bootstrap using the same reviewed source, populate `dist` from the
+   verified `distribution/bootstrap` directory, verify its externally supplied
+   SHA256SUMS digest and all files, then use the same pinned Wrangler version and
+   version-upload/exact-version activation sequence. The deployment operator must
+   authorize that one-off operation; no separate competing publisher should remain.
+4. The cloud task verifies actual serving, hashes and headers, then binds
+   `plugins.netcatty.app` separately. CI never binds or edits the domain. Keep main
+   website resources untouched.
+5. Ongoing publication has exactly one owner: this trusted-main workflow and its
+   concurrency group. Do not enable a parallel Cloudflare automatic Git publisher.
+   Environment waits are included in serialization; freshness is checked again after
+   waiting and before activation. A main update can still occur immediately after a
+   check; the next queued current-main run supersedes it. Cross-service transactional
+   locking is not claimed.
+
+`wrangler.jsonc` names only the isolated assets Worker and local output directory.
+It has no Worker script, dynamic proxy, run_worker_first, route or domain binding.
+Cloudflare deployment remains unverified until an actual authorized run succeeds.
+The connector's asset-session-JWT limitation is not bypassed: the future job uses
+only the separately approved, restricted token through official pinned Wrangler.
 
 Cloudflare references: [static assets configuration](https://developers.cloudflare.com/workers/static-assets/binding/),
-[headers](https://developers.cloudflare.com/workers/static-assets/headers/).
+[headers](https://developers.cloudflare.com/workers/static-assets/headers/),
+[version upload and deployment commands](https://developers.cloudflare.com/workers/wrangler/commands/workers/).
