@@ -1,0 +1,120 @@
+name: Build and publish static snapshot
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: registry-static-snapshot-main
+  cancel-in-progress: false
+jobs:
+  snapshot:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      manifest-sha256: ${{ steps.checksum.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require current main and a merged registry PR
+        run: python scripts/check_publication.py "$GITHUB_SHA"
+      - name: Install reviewed validator dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Validate reviewed registry and test snapshot builder
+        run: |
+          python scripts/validate.py
+          python -m unittest discover -s tests -p test_snapshot.py -v
+          python -m unittest discover -s tests -p test_publication_workflow.py -v
+      - name: Build complete snapshot
+        run: python scripts/build_snapshot.py --registry-ref "$GITHUB_SHA" --out dist
+      - name: Reject superseded main before making artifact available
+        run: python scripts/check_publication.py "$GITHUB_SHA"
+      - name: Record complete snapshot manifest digest
+        id: checksum
+        run: python -c 'import hashlib,pathlib; print("sha256=" + hashlib.sha256(pathlib.Path("dist/SHA256SUMS").read_bytes()).hexdigest())' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        id: upload
+        with:
+          name: registry-static-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+  publish:
+    needs: snapshot
+    if: github.ref == 'refs/heads/main' && needs.snapshot.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: cloudflare-production
+    steps:
+      - name: Check separately approved environment configuration
+        id: configured
+        env:
+          HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_ACCOUNT: ${{ vars.CLOUDFLARE_ACCOUNT_ID != '' }}
+        run: |
+          if [ "$HAS_TOKEN" = true ] && [ "$HAS_ACCOUNT" = true ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo 'Publication skipped: cloudflare-production is not configured. No upload or deployment attempted.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        if: steps.configured.outputs.ready == 'true'
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: steps.configured.outputs.ready == 'true'
+        with:
+          artifact-ids: ${{ needs.snapshot.outputs.artifact-id }}
+          path: dist
+          merge-multiple: true
+      - name: Verify trusted artifact and current main before installing publisher
+        if: steps.configured.outputs.ready == 'true'
+        env:
+          SNAPSHOT_MANIFEST_SHA: ${{ needs.snapshot.outputs.manifest-sha256 }}
+        run: |
+          python scripts/verify_snapshot.py --root dist --manifest-sha "$SNAPSHOT_MANIFEST_SHA" --registry-ref "$GITHUB_SHA"
+          python scripts/check_publication.py "$GITHUB_SHA"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: steps.configured.outputs.ready == 'true'
+        with:
+          node-version: '22'
+      - name: Install locked Wrangler without install scripts
+        if: steps.configured.outputs.ready == 'true'
+        run: npm ci --prefix tooling/cloudflare --ignore-scripts --no-audit --no-fund
+      - name: Upload complete static version without activating it
+        if: steps.configured.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/netcatty-version-upload.jsonl
+          WRANGLER_SEND_METRICS: 'false'
+        run: |
+          python scripts/check_publication.py "$GITHUB_SHA"
+          node tooling/cloudflare/node_modules/wrangler/bin/wrangler.js versions upload --name netcatty-plugins --config wrangler.jsonc --message "registry $GITHUB_SHA"
+      - name: Read exact uploaded version ID
+        id: uploaded
+        if: steps.configured.outputs.ready == 'true'
+        env:
+          VERSION_OUTPUT: ${{ runner.temp }}/netcatty-version-upload.jsonl
+        run: |
+          version_id=$(python scripts/read_uploaded_version.py "$VERSION_OUTPUT")
+          printf 'version_id=%s\n' "$version_id" >> "$GITHUB_OUTPUT"
+      - name: Recheck main and activate exactly one complete version
+        if: steps.configured.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: 'false'
+          VERSION_ID: ${{ steps.uploaded.outputs.version_id }}
+          SNAPSHOT_MANIFEST_SHA: ${{ needs.snapshot.outputs.manifest-sha256 }}
+        run: |
+          python scripts/verify_snapshot.py --root dist --manifest-sha "$SNAPSHOT_MANIFEST_SHA" --registry-ref "$GITHUB_SHA"
+          python scripts/check_publication.py "$GITHUB_SHA"
+          node tooling/cloudflare/node_modules/wrangler/bin/wrangler.js versions deploy "$VERSION_ID@100" --name netcatty-plugins --config wrangler.jsonc --yes

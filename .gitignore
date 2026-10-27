@@ -1,3 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
+dist/
+.wrangler/
+node_modules/

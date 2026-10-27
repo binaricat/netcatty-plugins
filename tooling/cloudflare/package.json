@@ -1,0 +1,9 @@
+{
+  "name": "netcatty-registry-publication-tools",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Pinned tools for the isolated registry static-assets publisher",
+  "devDependencies": {
+    "wrangler": "4.152.0"
+  }
+}
