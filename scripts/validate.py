@@ -4,16 +4,20 @@ import copy
 import hashlib
 import io
 import json
+import math
 import pathlib
 import re
+import struct
 import urllib.parse
 import urllib.request
 import zipfile
+import zlib
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LIMIT = 32 * 1024 * 1024
+MANIFEST_LIMIT = 1024 * 1024
 HOSTS = {'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'}
 
 def require(ok, message):
@@ -27,10 +31,32 @@ def pairs(items):
         result[key] = value
     return result
 
+def json_equal(left, right):
+    """JSON comparison that never treats booleans as numbers (Python does)."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(json_equal(value, right[key]) for key, value in left.items())
+    if isinstance(left, list):
+        return len(left) == len(right) and all(json_equal(a, b) for a, b in zip(left, right))
+    return left == right
+
+def reject_constant(value):
+    raise ValueError('Non-finite JSON number: ' + value)
+
+def json_float(value):
+    number = float(value)
+    require(math.isfinite(number), 'Non-finite JSON number')
+    return number
+
+def load_json(content):
+    return json.loads(content, object_pairs_hook=pairs,
+                      parse_constant=reject_constant, parse_float=json_float)
+
 def read(path):
     require(not path.is_symlink(), 'Symlinks are forbidden')
     require(path.stat().st_size <= 8 * 1024 * 1024, 'JSON exceeds 8 MiB')
-    return json.loads(path.read_text(), object_pairs_hook=pairs)
+    return load_json(path.read_text())
 
 def url_allowed(url):
     u = urllib.parse.urlsplit(url)
@@ -85,10 +111,10 @@ def validate(data, baseline=None):
                 key = (p['id'], old['entry']['version'])
                 require(key in after, 'Version history cannot be removed')
                 new = after[key]
-                require({k:v for k,v in new.items() if k != 'withdrawal'} ==
-                        {k:v for k,v in old.items() if k != 'withdrawal'}, 'Published version metadata is immutable; publish a new version')
+                require(json_equal({k:v for k,v in new.items() if k != 'withdrawal'},
+                                   {k:v for k,v in old.items() if k != 'withdrawal'}), 'Published version metadata is immutable; publish a new version')
                 if old['withdrawal'] is not None:
-                    require(new['withdrawal'] == old['withdrawal'], 'Withdrawal cannot be undone or rewritten')
+                    require(json_equal(new['withdrawal'], old['withdrawal']), 'Withdrawal cannot be undone or rewritten')
     return catalog
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -111,6 +137,48 @@ def download(url):
             error.close()
     raise ValueError('Too many redirects')
 
+def read_manifest_bytes(content, info, central_directory_offset):
+    """Bound actual DEFLATE output, independently of attacker-provided file_size.
+
+    ZipExtFile truncates output at the central directory's declared size. Reading
+    it with a bound cannot detect hidden trailing decompressed data, so inspect
+    the raw member and require the complete compressed stream to match its size
+    and CRC. Only stored/DEFLATE ZIP members are admitted for the manifest.
+    """
+    require(info.file_size <= MANIFEST_LIMIT, 'Manifest declared size exceeds limit')
+    offset = info.header_offset
+    require(0 <= offset and offset + 30 <= central_directory_offset, 'Truncated local ZIP header')
+    fields = struct.unpack_from('<4s5H3I2H', content, offset)
+    signature, _, flags, method, _, _, crc, compressed_size, size, name_size, extra_size = fields
+    require(signature == b'PK\x03\x04', 'Invalid local ZIP header')
+    require(flags == info.flag_bits and method == info.compress_type, 'Local/central ZIP metadata mismatch')
+    require(not flags & (1 | 0x40 | 0x2000), 'Encrypted or masked ZIP member')
+    require(size != 0xffffffff and compressed_size != 0xffffffff,
+            'ZIP64 local manifest sizes are unsupported; repack with netcatty-plugin pack')
+    # Data-descriptor archives may have zero local sizes; the central declaration
+    # is still checked against actual decoded bytes below.
+    if not flags & 8:
+        require((crc, compressed_size, size) == (info.CRC, info.compress_size, info.file_size), 'Local/central ZIP sizes or CRC mismatch')
+    start = offset + 30 + name_size + extra_size
+    end = start + info.compress_size
+    require(offset + 30 <= start <= end <= central_directory_offset, 'ZIP member overlaps central directory')
+    name = content[offset + 30:offset + 30 + name_size]
+    require(name == b'netcatty.plugin.json', 'Local manifest name mismatch')
+    compressed = content[start:end]
+    if method == zipfile.ZIP_STORED:
+        require(len(compressed) <= MANIFEST_LIMIT, 'Manifest actual size exceeds limit')
+        decoded = compressed
+    elif method == zipfile.ZIP_DEFLATED:
+        decoder = zlib.decompressobj(-zlib.MAX_WBITS)
+        decoded = decoder.decompress(compressed, MANIFEST_LIMIT + 1)
+        require(len(decoded) <= MANIFEST_LIMIT, 'Manifest actual size exceeds limit')
+        require(decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail, 'Incomplete or trailing manifest compression data')
+    else:
+        raise ValueError('Manifest requires stored or DEFLATE compression')
+    require(len(decoded) == info.file_size, 'Manifest actual/declared size mismatch')
+    require(zlib.crc32(decoded) == info.CRC, 'Manifest CRC mismatch')
+    return decoded
+
 def inspect_package(content, entry):
     require(len(content) <= LIMIT, 'Package exceeds 32 MiB')
     require(hashlib.sha256(content).hexdigest() == entry['artifact']['sha256'], 'Package SHA-256 mismatch')
@@ -128,9 +196,9 @@ def inspect_package(content, entry):
             size += item.file_size
         require(size <= 128 * 1024 * 1024, 'Expanded package exceeds limit')
         info = archive.getinfo('netcatty.plugin.json')
-        require(info.file_size <= 1024 * 1024, 'Manifest exceeds limit')
-        manifest = json.loads(archive.read(info), object_pairs_hook=pairs)
-        require(manifest == entry['manifest'], 'Package manifest differs from index')
+        manifest_bytes = read_manifest_bytes(content, info, archive.start_dir)
+        manifest = load_json(manifest_bytes)
+        require(json_equal(manifest, entry['manifest']), 'Package manifest differs from index')
 
 def main():
     parser = argparse.ArgumentParser()
@@ -143,7 +211,7 @@ def main():
     expected = validate(data, read(args.baseline) if args.baseline else None)
     if args.write:
         (args.root / 'catalog.json').write_text(json.dumps(expected, indent=2, ensure_ascii=False)+'\n')
-    require(read(args.root / 'catalog.json') == expected, 'catalog.json must exactly match active versions; run --write')
+    require(json_equal(read(args.root / 'catalog.json'), expected), 'catalog.json must exactly match active versions; run --write')
     if args.download:
         for p in data['plugins']:
             for r in p['versions']:
