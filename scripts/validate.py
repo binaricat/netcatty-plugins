@@ -121,14 +121,16 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
-def download(url):
+def download(url, limit=None):
+    limit = LIMIT if limit is None else limit
+    require(type(limit) is int and 0 < limit <= LIMIT, 'Invalid download byte limit')
     opener = urllib.request.build_opener(NoRedirect)
     for _ in range(5):
         url_allowed(url)
         try:
             with opener.open(urllib.request.Request(url, headers={'User-Agent':'netcatty-index-validator'}), timeout=30) as response:
-                content = response.read(LIMIT + 1)
-                require(len(content) <= LIMIT, 'Package exceeds 32 MiB')
+                content = response.read(limit + 1)
+                require(len(content) <= limit, 'Package exceeds download byte limit')
                 return content
         except urllib.error.HTTPError as error:
             if error.code not in (301,302,303,307,308):

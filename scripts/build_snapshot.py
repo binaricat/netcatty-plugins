@@ -1,5 +1,6 @@
 """Build a deterministic, all-or-nothing static snapshot. Never execute plugin code."""
 import argparse
+import copy
 import hashlib
 import json
 import pathlib
@@ -14,6 +15,8 @@ import validate
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MAX_RESOURCE = 256 * 1024
 MAX_TOTAL = 16 * 1024 * 1024
+MAX_PACKAGE = MAX_TOTAL
+ORIGIN = 'https://plugins.netcatty.app'
 HEADERS = """/*
   Access-Control-Allow-Origin: *
   X-Content-Type-Options: nosniff
@@ -48,7 +51,7 @@ def reject_constant(value):
 
 
 def parse(data):
-    return json.loads(data, object_pairs_hook=validate.pairs, parse_constant=reject_constant)
+    return validate.load_json(data)
 
 
 def canonical(value):
@@ -74,7 +77,28 @@ def fetch_source(repository, commit, source_path):
     return content
 
 
-def build(registry_ref, output, fetcher=fetch_source):
+def fetch_avatar(source):
+    if source['kind'] == 'repository':
+        return fetch_source(source['repository'], source['commit'], source['sourcePath'])
+    # Reviewed numeric account identity, never inferred from a repository owner.
+    url = f"https://avatars.githubusercontent.com/u/{source['userId']}?s=128&v=4"
+    opener = urllib.request.build_opener(validate.NoRedirect)
+    with opener.open(urllib.request.Request(url, headers={'User-Agent':'netcatty-static-snapshot'}), timeout=20) as response:
+        body = response.read(MAX_RESOURCE + 1)
+    require(len(body) <= MAX_RESOURCE, 'Avatar exceeds 256 KiB')
+    return body
+
+
+def assert_raster(body, format):
+    # Transport/type check only; clients still decode through their rasterizer.
+    if format == 'png':
+        require(len(body) >= 33 and body[:8] == b'\x89PNG\r\n\x1a\n' and body[12:16] == b'IHDR', 'Avatar is not PNG')
+    else:
+        require(len(body) >= 20 and body[:4] == b'RIFF' and body[8:12] == b'WEBP'
+                and int.from_bytes(body[4:8], 'little') + 8 == len(body), 'Avatar is not WebP')
+
+
+def build(registry_ref, output, fetcher=fetch_source, package_fetcher=None, avatar_fetcher=fetch_avatar):
     output = pathlib.Path(output)
     require(not output.exists(), 'Output already exists; use a new destination')
     index_bytes = git_file(registry_ref, 'index.json')
@@ -82,25 +106,60 @@ def build(registry_ref, output, fetcher=fetch_source):
     ledger, catalog = parse(index_bytes), parse(catalog_bytes)
     projected = validate.validate(ledger)
     require(canonical(catalog) == canonical(projected), 'Catalog differs from active ledger projection')
-    # PR #2 remains unmerged. Do not introduce release-package processing through
-    # the known-unhardened main validator. Enable mirroring in a later reviewed PR.
-    require(all('artifact' not in e for e in catalog), 'Package mirroring is gated pending hardened validator review')
     pins_bytes = (ROOT / 'distribution/sources.json').read_bytes()
     pins = parse(pins_bytes)
     Draft202012Validator(parse((ROOT / 'schema/distribution-sources.schema.json').read_bytes())).validate(pins)
+    version = pins.get('deliveryVersion', 1)
+    require(version == 2 or all('artifact' not in e for e in catalog), 'Package mirroring requires reviewed deliveryVersion 2')
+    authors = {author['subject']:author for author in pins.get('authors', [])}
+    require(len(authors) == len(pins.get('authors', [])), 'Duplicate author subject')
+    for author in authors.values():
+        avatar = author['avatar']
+        if avatar and avatar['source']['kind'] == 'github-avatar':
+            require(author['subject'] == f"github-user:{avatar['source']['userId']}", 'Avatar account does not match author subject')
     keys = [(p['id'], p['version'], p['repository'], p['commit']) for p in pins['plugins']]
     require(len(keys) == len(set(keys)), 'Duplicate source-resource pin')
     pin_map = dict(zip(keys, pins['plugins']))
     selected = {(e['id'], e['version'], e['repository'], e['commit']) for e in catalog}
     require(set(pin_map) == selected, 'Resource pins must exactly cover current catalog')
+    for entry in catalog:
+        subject = pin_map[(entry['id'], entry['version'], entry['repository'], entry['commit'])].get('authorSubject')
+        if subject is not None:
+            require(subject in authors and authors[subject]['displayName'] == entry['author'], 'Author subject does not match displayed author')
+    # Canonical ledger remains untouched. Only the generated distribution view
+    # rewrites artifact locations; identity, manifest, tag and digest stay exact.
+    upstream_catalog = catalog
+    ledger = copy.deepcopy(ledger)
+    if version == 2:
+        for plugin in ledger['plugins']:
+            for record in plugin['versions']:
+                artifact = record['entry'].get('artifact')
+                if artifact:
+                    artifact['url'] = f"{ORIGIN}/assets/{artifact['sha256']}.ncpkg"
+        catalog = [copy.deepcopy(record['entry']) for plugin in ledger['plugins']
+                   for record in plugin['versions'] if record['entry']['version'] == plugin['current']]
+        index_bytes, catalog_bytes = canonical(ledger), canonical(catalog)
     output.parent.mkdir(parents=True, exist_ok=True)
     stage = pathlib.Path(tempfile.mkdtemp(prefix='.snapshot-', dir=output.parent))
     total = 0
     try:
-        delivery = {'schemaVersion':1, 'registryCommit':registry_ref, 'catalogSha256':sha(catalog_bytes),
+        def asset(body, suffix, limit):
+            nonlocal total
+            require(0 < len(body) <= limit, 'Resource exceeds delivery limit')
+            path = f'/assets/{sha(body)}{suffix}'
+            target = stage / path.lstrip('/')
+            if not target.exists():
+                total += len(body)
+                require(total <= MAX_TOTAL, 'Snapshot source resources exceed 16 MiB')
+                target.parent.mkdir(exist_ok=True)
+                target.write_bytes(body)
+            return {'path':path, 'sha256':sha(body), 'size':len(body)}
+
+        delivery = {'schemaVersion':version, 'registryCommit':registry_ref, 'catalogSha256':sha(catalog_bytes),
                     'indexSha256':sha(index_bytes), 'sourceLockSha256':sha(pins_bytes),
                     'builderSha256':sha(pathlib.Path(__file__).read_bytes()), 'plugins':[]}
-        for e in catalog:
+        avatar_cache = {}
+        for e in upstream_catalog:
             key = (e['id'], e['version'], e['repository'], e['commit'])
             resources = pin_map[key]['resources']
             require(resources['readme']['sourcePath'] == e['readme'], 'README pin mismatch')
@@ -115,19 +174,29 @@ def build(registry_ref, output, fetcher=fetch_source):
             for kind, pin in resources.items():
                 body = fetcher(e['repository'], e['commit'], pin['sourcePath'])
                 require(len(body) <= MAX_RESOURCE and sha(body) == pin['sha256'], 'Resource size/hash mismatch')
-                total += len(body)
-                require(total <= MAX_TOTAL, 'Snapshot source resources exceed 16 MiB')
                 suffix = pathlib.PurePosixPath(pin['sourcePath']).suffix
                 require(suffix == '.md' if kind == 'readme' else suffix in ('.png','.webp'), 'Unsupported resource type')
                 if kind == 'readme':
                     body.decode('utf-8')
-                asset = f'/assets/{sha(body)}{suffix}'
-                target = stage / asset.lstrip('/')
-                target.parent.mkdir(exist_ok=True)
-                target.write_bytes(body)
-                item[kind] = {'path':asset,'sha256':sha(body),'size':len(body)}
+                item[kind] = asset(body, suffix, MAX_RESOURCE)
+            subject = pin_map[key].get('authorSubject')
+            avatar_pin = authors[subject]['avatar'] if subject else None
+            if version == 2 and avatar_pin is not None:
+                if subject not in avatar_cache:
+                    body = avatar_fetcher(avatar_pin['source'])
+                    require(len(body) == avatar_pin['size'] and sha(body) == avatar_pin['sha256'], 'Avatar size/hash mismatch')
+                    assert_raster(body, avatar_pin['format'])
+                    avatar_cache[subject] = asset(body, '.' + avatar_pin['format'], MAX_RESOURCE)
+                item['avatar'] = avatar_cache[subject]
+            if 'artifact' in e:
+                body = (package_fetcher(e['artifact']['url']) if package_fetcher else
+                        validate.download(e['artifact']['url'], limit=min(MAX_PACKAGE, MAX_TOTAL - total)))
+                require(0 < len(body) <= MAX_PACKAGE and total + len(body) <= MAX_TOTAL, 'Package exceeds snapshot byte budget')
+                validate.inspect_package(body, e)
+                item['artifact'] = asset(body, '.ncpkg', MAX_PACKAGE)
             delivery['plugins'].append(item)
-        Draft202012Validator(parse((ROOT / 'schema/delivery.schema.json').read_bytes())).validate(delivery)
+        schema = 'delivery-v2.schema.json' if version == 2 else 'delivery.schema.json'
+        Draft202012Validator(parse((ROOT / 'schema' / schema).read_bytes())).validate(delivery)
         delivery_bytes = canonical(delivery)
         snapshot_id = sha(delivery_bytes)
         snapshot_dir = stage / 'snapshots' / snapshot_id

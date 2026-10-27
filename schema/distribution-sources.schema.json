@@ -102,6 +102,125 @@
                 }
               }
             }
+          },
+          "authorSubject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        }
+      }
+    },
+    "deliveryVersion": {
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "authors": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "subject",
+          "displayName",
+          "avatar"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "pattern": "^(project:[a-z0-9.-]+|github-user:[1-9][0-9]*)$"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "avatar": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "source",
+                  "sha256",
+                  "size",
+                  "format"
+                ],
+                "properties": {
+                  "source": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "kind",
+                          "repository",
+                          "commit",
+                          "sourcePath"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "const": "repository"
+                          },
+                          "repository": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+                          },
+                          "commit": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{40}$"
+                          },
+                          "sourcePath": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 512
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "kind",
+                          "userId"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "const": "github-avatar"
+                          },
+                          "userId": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 262144
+                  },
+                  "format": {
+                    "enum": [
+                      "png",
+                      "webp"
+                    ]
+                  }
+                }
+              }
+            ]
           }
         }
       }

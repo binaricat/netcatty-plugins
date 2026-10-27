@@ -40,6 +40,26 @@ def verify(root, expected_manifest_sha, registry_commit):
             raise ValueError('Snapshot pointer does not match verified files')
         if (root / path.lstrip('/')).read_bytes() != content:
             raise ValueError('Snapshot aliases disagree')
+    delivery = json.loads((root/'delivery.json').read_bytes())
+    if (delivery['registryCommit'] != registry_commit or
+            delivery['catalogSha256'] != pointer['catalog']['sha256'] or
+            delivery['indexSha256'] != pointer['index']['sha256']):
+        raise ValueError('Delivery provenance mismatch')
+    for plugin in delivery['plugins']:
+        for kind in ('readme', 'iconLight', 'iconDark', 'avatar', 'artifact'):
+            ref = plugin[kind]
+            if ref is None:
+                continue
+            suffixes = ('md',) if kind == 'readme' else ('ncpkg',) if kind == 'artifact' else ('png', 'webp')
+            limit = 16 * 1024 * 1024 if kind == 'artifact' else 256 * 1024
+            if (set(ref) != {'path','sha256','size'} or type(ref['size']) is not int or
+                    not 0 < ref['size'] <= limit or not re.fullmatch('[a-f0-9]{64}', ref['sha256']) or
+                    ref['path'] not in [f"/assets/{ref['sha256']}.{suffix}" for suffix in suffixes] or
+                    ref['path'].lstrip('/') not in listed):
+                raise ValueError('Invalid or missing delivery resource')
+            content = (root/ref['path'].lstrip('/')).read_bytes()
+            if len(content) != ref['size'] or digest(content) != ref['sha256']:
+                raise ValueError('Delivery resource size/hash mismatch')
     print('Verified complete static snapshot for', registry_commit)
 
 
