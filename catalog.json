@@ -191,5 +191,79 @@
         ]
       }
     }
+  },
+  {
+    "id": "com.netcatty.market-smoke",
+    "version": "0.1.0",
+    "name": "Marketplace Acceptance Example (Dev QA)",
+    "description": "Temporary, user-visible development QA sample. Shows its version only; no host/network access. Requires app =0.0.0 and API =0.1.0-internal.1.",
+    "author": "Netcatty",
+    "repository": "binaricat/netcatty-plugin-examples",
+    "commit": "a4a08ca6fbf7daa2509e9d1376b93cccbeee2f61",
+    "license": "MIT",
+    "readme": "plugins/market-smoke/README.md",
+    "manifest": {
+      "manifestVersion": 1,
+      "id": "com.netcatty.market-smoke",
+      "name": "market-smoke",
+      "displayName": {
+        "en": "Marketplace Acceptance Example",
+        "zh-CN": "市场验收样例"
+      },
+      "description": "Visible test example for install and update acceptance. No external data access.",
+      "version": "0.1.0",
+      "publisher": "netcatty",
+      "license": "MIT",
+      "engines": {
+        "netcatty": "=0.0.0",
+        "api": "=0.1.0-internal.1"
+      },
+      "main": {
+        "browser": "index.js"
+      },
+      "activationEvents": [
+        "onCommand:com.netcatty.market-smoke.version",
+        "onView:com.netcatty.market-smoke.panel"
+      ],
+      "permissions": {
+        "required": [
+          "commands",
+          "menus",
+          "views"
+        ],
+        "optional": []
+      },
+      "contributes": {
+        "commands": [
+          {
+            "id": "com.netcatty.market-smoke.version",
+            "title": {
+              "en": "Acceptance Example: Read Version"
+            }
+          }
+        ],
+        "menus": [
+          {
+            "command": "com.netcatty.market-smoke.version",
+            "location": "commandPalette",
+            "group": "examples"
+          }
+        ],
+        "views": [
+          {
+            "id": "com.netcatty.market-smoke.panel",
+            "title": {
+              "en": "Marketplace Acceptance Example"
+            },
+            "location": "modal",
+            "entry": "panel.html"
+          }
+        ]
+      }
+    },
+    "artifact": {
+      "url": "https://github.com/binaricat/netcatty-plugin-examples/releases/download/market-smoke-v0.1.0/market-smoke-0.1.0.ncpkg",
+      "sha256": "d402cab030784c39e3f5a4f84b1c00b97c118dc17d715e057b6eecc5508a6724"
+    }
   }
 ]
