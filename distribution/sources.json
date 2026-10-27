@@ -34,9 +34,22 @@
         }
       },
       "authorSubject": "project:netcatty"
+    },
+    {
+      "id": "com.netcatty.market-smoke",
+      "version": "0.1.0",
+      "repository": "binaricat/netcatty-plugin-examples",
+      "commit": "a4a08ca6fbf7daa2509e9d1376b93cccbeee2f61",
+      "authorSubject": "project:netcatty-examples",
+      "resources": {
+        "readme": {
+          "sourcePath": "plugins/market-smoke/README.md",
+          "sha256": "936b3f87a3dcb52f774e1c2897d405a34168972fed368ac087872c4a0934ec0f"
+        }
+      }
     }
   ],
-  "deliveryVersion": 1,
+  "deliveryVersion": 2,
   "authors": [
     {
       "subject": "project:netcatty",
@@ -52,6 +65,11 @@
         "size": 7843,
         "format": "png"
       }
+    },
+    {
+      "subject": "project:netcatty-examples",
+      "displayName": "Netcatty",
+      "avatar": null
     }
   ]
 }
