@@ -19,7 +19,8 @@
           "sourcePath": "examples/plugins/starter-netcatty/assets/logo-dark.png",
           "sha256": "7a897a67ae6b652339c77a113d1c759919776fead82d2eefd0238d3c05ba87fe"
         }
-      }
+      },
+      "authorSubject": "project:netcatty"
     },
     {
       "id": "com.netcatty.hello",
@@ -31,6 +32,25 @@
           "sourcePath": "examples/plugins/hello-netcatty/README.md",
           "sha256": "1692573445e3688b4fe3612282becc086b191a034c0609deeaaebf615627c209"
         }
+      },
+      "authorSubject": "project:netcatty"
+    }
+  ],
+  "deliveryVersion": 1,
+  "authors": [
+    {
+      "subject": "project:netcatty",
+      "displayName": "Netcatty",
+      "avatar": {
+        "source": {
+          "kind": "repository",
+          "repository": "binaricat/Netcatty",
+          "commit": "933bc93fc3b3027209955c38f1e30a7daf2e5fc0",
+          "sourcePath": "build/icons/128x128.png"
+        },
+        "sha256": "cc680bf53f845ef999a78f26f874b984fe4f66a8a97a73d9640f57365b3af7d2",
+        "size": 7843,
+        "format": "png"
       }
     }
   ]

@@ -29,6 +29,7 @@ jobs:
         run: |
           python scripts/validate.py
           python -m unittest discover -s tests -p test_snapshot.py -v
+          python -m unittest discover -s tests -p test_delivery_v2.py -v
           python -m unittest discover -s tests -p test_publication_workflow.py -v
       - name: Build complete snapshot
         run: python scripts/build_snapshot.py --registry-ref "$GITHUB_SHA" --out dist

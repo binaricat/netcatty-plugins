@@ -46,7 +46,13 @@ class SnapshotTests(unittest.TestCase):
         with self.source_pins(), tempfile.TemporaryDirectory() as directory, patch.object(build, 'git_file', side_effect=self.source_registry):
             output = pathlib.Path(directory)/'snapshot'
             pointer = build.build(SEED, output, fetcher=self.source)
-            self.assertEqual(pointer, json.loads((BOOTSTRAP/'v1/snapshot.json').read_text()))
+            # The historical inputs remain frozen, while builderSha256 reflects
+            # the actual reviewed builder. Changing code changes snapshotId.
+            historical = json.loads((BOOTSTRAP/'delivery.json').read_text())
+            rebuilt = json.loads((output/'delivery.json').read_text())
+            self.assertEqual(rebuilt['builderSha256'], hashlib.sha256(pathlib.Path(build.__file__).read_bytes()).hexdigest())
+            self.assertEqual({k:v for k,v in rebuilt.items() if k != 'builderSha256'},
+                             {k:v for k,v in historical.items() if k != 'builderSha256'})
             for name in ('catalog','index','delivery'):
                 descriptor = pointer[name]
                 content = (output/descriptor['path'].lstrip('/')).read_bytes()
