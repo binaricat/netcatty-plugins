@@ -1,0 +1,17 @@
+/*
+  Access-Control-Allow-Origin: *
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Content-Security-Policy: default-src 'none'; frame-ancestors 'none'
+/v1/snapshot.json
+  Cache-Control: public, max-age=60, must-revalidate
+/catalog.json
+  Cache-Control: public, max-age=60, must-revalidate
+/index.json
+  Cache-Control: public, max-age=60, must-revalidate
+/delivery.json
+  Cache-Control: public, max-age=60, must-revalidate
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+/snapshots/*
+  Cache-Control: public, max-age=31536000, immutable

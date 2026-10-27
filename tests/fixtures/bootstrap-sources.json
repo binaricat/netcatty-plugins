@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "id": "com.netcatty.starter",
+      "version": "0.1.2",
+      "repository": "binaricat/Netcatty",
+      "commit": "f4a6b205adca486d4e9cda0270e13a9ff0afd7be",
+      "resources": {
+        "readme": {
+          "sourcePath": "examples/plugins/starter-netcatty/README.md",
+          "sha256": "d685ec68558c81705f03195ca35a0a62ea6ec75d8837d5ddb5b5a970890aae6e"
+        },
+        "iconLight": {
+          "sourcePath": "examples/plugins/starter-netcatty/assets/logo-light.png",
+          "sha256": "ec7bcd5e470ee3d3d9f7f77d120a4de7496a9c0ba984094f84e560d240bea947"
+        },
+        "iconDark": {
+          "sourcePath": "examples/plugins/starter-netcatty/assets/logo-dark.png",
+          "sha256": "7a897a67ae6b652339c77a113d1c759919776fead82d2eefd0238d3c05ba87fe"
+        }
+      }
+    },
+    {
+      "id": "com.netcatty.hello",
+      "version": "0.1.0",
+      "repository": "binaricat/Netcatty",
+      "commit": "4336f8fd53a05a48d6bbc9ad3ce0ca88b121862f",
+      "resources": {
+        "readme": {
+          "sourcePath": "examples/plugins/hello-netcatty/README.md",
+          "sha256": "1692573445e3688b4fe3612282becc086b191a034c0609deeaaebf615627c209"
+        }
+      }
+    }
+  ]
+}
