@@ -10,6 +10,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   snapshot:
+    permissions:
+      contents: read
+      pull-requests: read
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -22,6 +25,8 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Require current main and a merged registry PR
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/check_publication.py "$GITHUB_SHA"
       - name: Install reviewed validator dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
@@ -31,9 +36,12 @@ jobs:
           python -m unittest discover -s tests -p test_snapshot.py -v
           python -m unittest discover -s tests -p test_delivery_v2.py -v
           python -m unittest discover -s tests -p test_publication_workflow.py -v
+          python -m unittest discover -s tests -p test_publication_gate.py -v
       - name: Build complete snapshot
         run: python scripts/build_snapshot.py --registry-ref "$GITHUB_SHA" --out dist
       - name: Reject superseded main before making artifact available
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/check_publication.py "$GITHUB_SHA"
       - name: Record complete snapshot manifest digest
         id: checksum
@@ -46,6 +54,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   publish:
+    permissions:
+      contents: read
+      pull-requests: read
     needs: snapshot
     if: github.ref == 'refs/heads/main' && needs.snapshot.result == 'success'
     runs-on: ubuntu-latest
@@ -78,6 +89,7 @@ jobs:
       - name: Verify trusted artifact and current main before installing publisher
         if: steps.configured.outputs.ready == 'true'
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           SNAPSHOT_MANIFEST_SHA: ${{ needs.snapshot.outputs.manifest-sha256 }}
         run: |
           python scripts/verify_snapshot.py --root dist --manifest-sha "$SNAPSHOT_MANIFEST_SHA" --registry-ref "$GITHUB_SHA"
@@ -94,6 +106,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
           WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/netcatty-version-upload.jsonl
           WRANGLER_SEND_METRICS: 'false'
         run: |
@@ -114,6 +127,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_SEND_METRICS: 'false'
           VERSION_ID: ${{ steps.uploaded.outputs.version_id }}
+          GITHUB_TOKEN: ${{ github.token }}
           SNAPSHOT_MANIFEST_SHA: ${{ needs.snapshot.outputs.manifest-sha256 }}
         run: |
           python scripts/verify_snapshot.py --root dist --manifest-sha "$SNAPSHOT_MANIFEST_SHA" --registry-ref "$GITHUB_SHA"
