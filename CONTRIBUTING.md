@@ -31,3 +31,21 @@ listing does not transfer ownership or certify that a license applies to all con
 Infrastructure changes belong in separate PRs. Untrusted PR CI intentionally runs
 base validator code and base tests, so test proposed validator/schema changes locally
 and have a maintainer inspect them before merge. Do not run PR-provided build scripts.
+
+## Supported package representation
+
+This pre-release `.ncpkg` format supports bounded ordinary ZIP32 packages, as
+produced by the current Netcatty CLI. ZIP64 is not supported in this release,
+even when the actual files are small. A valid general-purpose ZIP archive is not
+necessarily a supported `.ncpkg` package.
+
+Use the existing `netcatty-plugin pack <directory> --out <package.ncpkg>` command
+after preparing the plugin files; keep the output outside the source directory.
+The canonical packer writes stored entries with UTF-8 names, ordinary 32-bit
+sizes/offsets and matching local/central metadata, without data descriptors or
+ZIP64 extras. The app also validates entrypoints, resources and other package
+constraints. Registry ZIP checks are only static admission checks, not a substitute
+for app/CLI validation and not a promise to accept other ZIP encoders' features.
+
+This clarification does not enable package mirroring or make the initial
+source-only entries installable.

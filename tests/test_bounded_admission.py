@@ -65,6 +65,19 @@ class BoundedAdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Manifest CRC mismatch'):
             self.inspect(bytes(content))
 
+    def test_small_valid_zip64_has_unsupported_format_diagnostic(self):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, 'w', compression=zipfile.ZIP_STORED) as archive:
+            with archive.open('netcatty.plugin.json', 'w', force_zip64=True) as member:
+                member.write(self.manifest)
+        content = stream.getvalue()
+        self.assertLessEqual(len(content), 8192)
+        # Verify that this is a valid small ZIP, while outside the ncpkg subset.
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            self.assertEqual(archive.read('netcatty.plugin.json'), self.manifest)
+        with self.assertRaisesRegex(ValueError, 'ZIP64 local manifest sizes are unsupported'):
+            self.inspect(content)
+
 
 if __name__ == '__main__':
     unittest.main()

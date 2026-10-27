@@ -153,6 +153,8 @@ def read_manifest_bytes(content, info, central_directory_offset):
     require(signature == b'PK\x03\x04', 'Invalid local ZIP header')
     require(flags == info.flag_bits and method == info.compress_type, 'Local/central ZIP metadata mismatch')
     require(not flags & (1 | 0x40 | 0x2000), 'Encrypted or masked ZIP member')
+    require(size != 0xffffffff and compressed_size != 0xffffffff,
+            'ZIP64 local manifest sizes are unsupported; repack with netcatty-plugin pack')
     # Data-descriptor archives may have zero local sizes; the central declaration
     # is still checked against actual decoded bytes below.
     if not flags & 8:
